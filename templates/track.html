@@ -1,0 +1,128 @@
+<!DOCTYPE html>
+<html lang="en" xmlns="http://www.w3.org/1999/xhtml" xml:lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Tracker Guy</title>
+  <link rel="stylesheet" href="https://stackpath.bootstrapcdn.com/bootstrap/4.1.1/css/bootstrap.min.css" />
+  <script src="https://code.jquery.com/jquery-3.3.1.js"></script>
+  <script src="https://api.tiles.mapbox.com/mapbox.js/plugins/turf/v2.0.0/turf.min.js" charset="utf-8"></script>
+  <script src='https://api.mapbox.com/mapbox-gl-js/v1.4.1/mapbox-gl.js'></script>
+  <script src="https://api.mapbox.com/mapbox-gl-js/plugins/mapbox-gl-directions/v3.1.2/mapbox-gl-directions.js"></script>
+  <link rel="stylesheet" href="https://cdn.lineicons.com/1.0.1/LineIcons.min.css" />
+  <link href="https://api.mapbox.com/mapbox-gl-js/plugins/mapbox-gl-directions/v3.1.2/mapbox-gl-directions.css" rel="stylesheet" type="text/css" />
+  <link href='https://api.mapbox.com/mapbox-gl-js/v1.4.1/mapbox-gl.css' rel='stylesheet' />
+  <style>
+    html, body {
+      height: 100%;
+      margin: 0;
+      padding: 0;
+    }
+    #map {
+      height: auto;
+      width: 100%;
+      position: absolute;
+      top: 40px;
+      bottom: 0;
+      margin-top: 100px;
+      margin-left: 25%;
+    }
+    .marker {
+      font-size: 24px;
+      cursor: pointer;
+    }
+    .mapboxgl-ctrl-directions {
+      display: none;
+    }
+    #heading {
+      margin-top: 20px;
+    }
+  </style>
+</head>
+<body>
+  <div id="heading" class="container text-center">
+    <h1>Track Guy</h1>
+    <p>Tracker Id : {{tracker_id}}</p>
+  </div>
+  <div id='map' style='width: 800px; height: 600px;'></div>
+  <script>
+
+    var ws = new WebSocket('ws://127.0.0.1:5678');
+
+    var tracker_id = '{{tracker_id}}';
+    var rider = null;
+    var marker = null;
+    mapboxgl.accessToken = '{{accessToken}}';
+
+    var map = new mapboxgl.Map({
+      container: 'map',
+      style: 'mapbox://styles/mapbox/streets-v11',
+      zoom: 16
+    });
+
+    var directions = new MapboxDirections({
+      accessToken: mapboxgl.accessToken,
+      interactive: false,
+      profile: 'driving',
+      controls: {
+          inputs: false,
+          instructions: false
+      }
+    });
+
+    map.addControl(directions);
+
+    navigator.geolocation.getCurrentPosition(function(position) {
+      var el = document.createElement('i');
+      findMe = new mapboxgl.Marker(el).setLngLat([position.coords.longitude, position.coords.latitude]).addTo(map);
+        map.setCenter([position.coords.longitude, position.coords.latitude]);
+    });
+
+    map.on('click', function(e) {
+      if(marker == null) {
+        var el = document.createElement('i');
+        el.className = 'lni-money-location';
+        el.style.fontSize = '20px';
+        el.style.fontWeight = 'bold';
+        marker = new mapboxgl.Marker(el).setLngLat(e.lngLat).addTo(map);
+      } else {
+        marker.setLngLat(e.lngLat);
+      }
+
+      if(rider != null) {
+        directions.setOrigin(rider.getLngLat().toArray());
+        directions.setDestination(marker.getLngLat().toArray());      
+      }
+
+      ws.send(JSON.stringify({'change': 'tracker', id: tracker_id, 'position': marker.getLngLat().toArray()}));
+    });
+
+    var first = null;
+
+    ws.onmessage = function(event) {
+      data = JSON.parse(event.data);
+
+      console.log(data);
+      if(data.update == 'rider') {
+        if(rider == null) {
+          var el = document.createElement('i');
+          el.className = 'lni-scooter';
+          el.style.fontSize = '20px';
+          el.style.fontWeight = 'bold';
+          rider = new mapboxgl.Marker(el).setLngLat(data.position).addTo(map);
+        } else {
+          rider.setLngLat(data.position);
+        }
+
+        if(first == null) {
+          directions.setOrigin(rider.getLngLat().toArray());
+          directions.setDestination(marker.getLngLat().toArray());
+          first = true;
+        }
+
+      }
+    }
+
+
+  </script>
+</body>
+</html>

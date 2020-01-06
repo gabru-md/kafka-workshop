@@ -1,0 +1,185 @@
+<!DOCTYPE html>
+<html lang="en" xmlns="http://www.w3.org/1999/xhtml" xml:lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Delivery Guy</title>
+  <link rel="stylesheet" href="https://stackpath.bootstrapcdn.com/bootstrap/4.1.1/css/bootstrap.min.css" />
+  <script src="https://code.jquery.com/jquery-3.3.1.js"></script>
+  <script src="https://api.tiles.mapbox.com/mapbox.js/plugins/turf/v2.0.0/turf.min.js" charset="utf-8"></script>
+  <script src='https://api.mapbox.com/mapbox-gl-js/v1.4.1/mapbox-gl.js'></script>
+  <script src="https://api.mapbox.com/mapbox-gl-js/plugins/mapbox-gl-directions/v3.1.2/mapbox-gl-directions.js"></script>
+  <link rel="stylesheet" href="https://cdn.lineicons.com/1.0.1/LineIcons.min.css" />
+  <link href="https://api.mapbox.com/mapbox-gl-js/plugins/mapbox-gl-directions/v3.1.2/mapbox-gl-directions.css" rel="stylesheet" type="text/css" />
+  <link href='https://api.mapbox.com/mapbox-gl-js/v1.4.1/mapbox-gl.css' rel='stylesheet' />
+  <style>
+    html, body {
+      height: 100%;
+      margin: 0;
+      padding: 0;
+    }
+    #map {
+      height: auto;
+      width: 100%;
+      position: absolute;
+      top: 40px;
+      bottom: 0;
+      margin-top: 100px;
+      margin-left: 25%;
+    }
+    .marker {
+      font-size: 24px;
+      cursor: pointer;
+    }
+    .mapboxgl-ctrl-directions {
+      display: none;
+    }
+    #heading {
+      margin-top: 20px;
+    }
+  </style>
+</head>
+<body>
+  <div id="heading" class="container text-center">
+    <h1>Delivery Guy</h1>
+    <p>Rider Id : {{rider_id}}</p>
+  </div>
+  <div id='map' style='width: 800px; height: 600px;'></div>
+  <script>
+
+    var ws = new WebSocket('ws://127.0.0.1:5678');
+    var rider_id = '{{rider_id}}';
+    var rider = null;
+    var marker = null;
+    mapboxgl.accessToken = '{{accessToken}}';
+
+    function decode(encoded){
+
+        // array that holds the points
+
+        var points=[ ]
+        var index = 0, len = encoded.length;
+        var lat = 0, lng = 0;
+        while (index < len) {
+            var b, shift = 0, result = 0;
+            do {
+
+        b = encoded.charAt(index++).charCodeAt(0) - 63; 
+                  result |= (b & 0x1f) << shift;
+                  shift += 5;
+                 } while (b >= 0x20);
+        var dlat = ((result & 1) != 0 ? ~(result >> 1) : (result >> 1));
+        lat += dlat;
+        shift = 0;
+        result = 0;
+         do {
+            b = encoded.charAt(index++).charCodeAt(0) - 63;
+            result |= (b & 0x1f) << shift;
+           shift += 5;
+             } while (b >= 0x20);
+         var dlng = ((result & 1) != 0 ? ~(result >> 1) : (result >> 1));
+         lng += dlng;
+
+       points.push({latitude:( lat / 1E5),longitude:( lng / 1E5)})  
+
+      }
+      return points;
+    }
+
+
+
+    var map = new mapboxgl.Map({
+      container: 'map',
+      style: 'mapbox://styles/mapbox/streets-v11',
+      zoom: 16
+    });
+
+    var directions = new MapboxDirections({
+      accessToken: mapboxgl.accessToken,
+      interactive: false,
+      profile: 'driving',
+      controls: {
+          inputs: false,
+          instructions: false
+      }
+    });
+
+    directions.on('route', function(event) {
+        var route = event.route[0];
+        console.log(route);
+        ws.send(JSON.stringify({change: 'rider', id: rider_id, position: rider.getLngLat().toArray()}));
+        // start driving
+        var metersTraveled = 0;
+        var metersPerSecond = route.distance / route.duration;
+        // flip from latLng to lngLat
+        var coordinates = decode(route.geometry).map(function (latLng) {
+            var lngLat = [latLng.longitude, latLng.latitude];
+            return lngLat;
+        });
+        // console.log(coordinates);
+        var line = {type: 'Feature', geometry: {'type': 'LineString', 'coordinates': coordinates }};
+        var drivingInterval = window.setInterval(function() {
+            if (metersTraveled >= route.distance) {
+                window.clearInterval(drivingInterval);
+            }
+            else {
+                var along = turf.along(line, metersTraveled / 1000, 'kilometers');
+                rider.setLngLat(along.geometry.coordinates);
+                ws.send(JSON.stringify({change: 'rider', id: rider_id, position: rider.getLngLat().toArray()}));
+                metersTraveled = metersTraveled + metersPerSecond;
+            }
+        }, 1000);
+    });
+
+    map.addControl(directions);
+
+    navigator.geolocation.getCurrentPosition(function(position) {
+      var el = document.createElement('i');
+      findMe = new mapboxgl.Marker(el).setLngLat([position.coords.longitude, position.coords.latitude]).addTo(map);
+        map.setCenter([position.coords.longitude, position.coords.latitude]);
+    });
+
+    map.on('click', function(e) {
+      if(rider == null) {
+        var el = document.createElement('i');
+        el.className = 'lni-scooter';
+        el.style.fontSize = '20px';
+        el.style.fontWeight = 'bold';
+        rider = new mapboxgl.Marker(el).setLngLat(e.lngLat).addTo(map);
+      } else {
+        rider.setLngLat(e.lngLat);
+      }
+      if(marker != null) {
+        directions.setOrigin(rider.getLngLat().toArray());
+        directions.setDestination(marker.getLngLat().toArray());
+      }
+
+      ws.send(JSON.stringify({change: 'rider', id: rider_id, position: rider.getLngLat().toArray()}));
+    });
+
+    var first = null;
+
+    ws.onmessage = function(event) {
+      data = JSON.parse(event.data);
+
+      console.log(data);
+      if(data.update == 'tracker') {
+        if(marker == null) {
+          var el = document.createElement('i');
+          el.className = 'lni-money-location';
+          el.style.fontSize = '20px';
+          el.style.fontWeight = 'bold';
+          marker = new mapboxgl.Marker(el).setLngLat(data.position).addTo(map);
+        } else {
+          marker.setLngLat(data.position);
+        }
+        if(first == null) {
+          directions.setOrigin(rider.getLngLat().toArray());
+          directions.setDestination(marker.getLngLat().toArray());
+          first = true;
+        }
+      }
+    }
+
+  </script>
+</body>
+</html>
